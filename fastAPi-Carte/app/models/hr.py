@@ -10,10 +10,10 @@ class Department(MongoModel):
     store_id: str
 
 class PersonalDetails(MongoModel):
-    citizenship: str
-    gender: str
-    birth_date: str
-    age: str
+    citizenship: Optional[str] = None
+    gender: Optional[str] = None
+    birth_date: Optional[str] = None
+    age: Optional[str] = None
     
     def to_response_dict(self) -> dict:
         """Convert PersonalDetails to dictionary for response"""
@@ -25,10 +25,10 @@ class PersonalDetails(MongoModel):
         }
 
 class ContactDetails(MongoModel):
-    cell_phone: str
-    whatsapp_number: str
-    email: str
-    address: str
+    cell_phone: Optional[str] = None
+    whatsapp_number: Optional[str] = None
+    email: Optional[str] = None
+    address: Optional[str] = None
     
     def to_response_dict(self) -> dict:
         """Convert ContactDetails to dictionary for response"""
@@ -40,10 +40,10 @@ class ContactDetails(MongoModel):
         }
 
 class EmploymentDetails(MongoModel):
-    job_title: str
-    team: str
-    employment_type: str
-    location: str
+    job_title: Optional[str] = None
+    team: Optional[str] = None
+    employment_type: Optional[str] = None
+    location: Optional[str] = None
     
     def to_response_dict(self) -> dict:
         """Convert EmploymentDetails to dictionary for response"""
