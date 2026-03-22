@@ -614,6 +614,7 @@ class UserResponse(BaseModel):
     last_name: Optional[str] = None
     email_verified_at: Optional[datetime] = None
     remember_token: Optional[str] = None
+    password_changed: Optional[bool] = False 
     cashAccounts: Optional[List[Any]] = []
     cardAccounts: Optional[List[Any]] = []
     onlineAccounts: Optional[List[Any]] = []
