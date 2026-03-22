@@ -257,6 +257,7 @@ class User(MongoModel):
     password: Optional[str] = None  # Make password optional
     email_verified_at: Optional[datetime] = None
     remember_token: Optional[str] = None
+    password_changed: Optional[bool] = False
     cashAccounts: Optional[List[Any]] = []
     cardAccounts: Optional[List[Any]] = []
     onlineAccounts: Optional[List[Any]] = []
