@@ -233,10 +233,10 @@ class PersonalDetailsResponse(BaseModel):
         json_encoders=COMMON_ENCODERS
     )
     
-    citizenship: str
-    gender: str
-    birth_date: str
-    age: str
+    citizenship: Optional[str] = None  # Changed from str to Optional[str]
+    gender: Optional[str] = None       # Changed from str to Optional[str]
+    birth_date: Optional[str] = None   # Changed from str to Optional[str]
+    age: Optional[str] = None          # Changed from str to Optional[str]
 
 class ContactDetailsResponse(BaseModel):
     model_config = ConfigDict(
@@ -244,10 +244,10 @@ class ContactDetailsResponse(BaseModel):
         json_encoders=COMMON_ENCODERS
     )
     
-    cell_phone: str
-    whatsapp_number: str
-    email: str
-    address: str
+    cell_phone: Optional[str] = None
+    whatsapp_number: Optional[str] = None
+    email: Optional[str] = None
+    address: Optional[str] = None
 
 class EmploymentDetailsResponse(BaseModel):
     model_config = ConfigDict(
@@ -255,10 +255,10 @@ class EmploymentDetailsResponse(BaseModel):
         json_encoders=COMMON_ENCODERS
     )
     
-    job_title: str
-    team: str
-    employment_type: str
-    location: str
+    job_title: Optional[str] = None
+    team: Optional[str] = None
+    employment_type: Optional[str] = None
+    location: Optional[str] = None
 
 class EmployeeStatusResponse(BaseModel):
     model_config = ConfigDict(
@@ -297,8 +297,8 @@ class EmployeeResponse(BaseModel):
     tenant_id: str
     store_id: str
     main_access_role_id: str
-    hire_date: datetime  # CHANGED from str to datetime  <--- THIS TOO
-    salary: float
+    hire_date: Optional[datetime] = None  # Changed from datetime to Optional
+    salary: Optional[float] = None        # Changed from float to Optional
     first_name: str
     last_name: Optional[str] = None
     avatar_url: Optional[str] = None
