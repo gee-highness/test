@@ -197,14 +197,10 @@ async def get_employee(employee_id: str):
     except Exception:
         return error_response(message="Invalid ID format for employee", code=400)
 
-@router.post("/employees", response_model=StandardResponse[EmployeeResponse])
+@router.post("/employees", response_model=StandardResponse[Dict[str, Any]])  # Change response_model to Dict
 async def create_employee(employee: Employee):
     """
     Create a new employee record with proper user management.
-    - If user with email exists and is active -> return conflict
-    - If user with email exists and employee is inactive -> reactivate, reset password, send email
-    - If user exists but no employee -> create employee, reset password, send email
-    - If no user exists -> create both user and employee, generate password, send email
     """
     try:
         from app.routes.auth import hash_password
@@ -269,11 +265,14 @@ async def create_employee(employee: Employee):
                     # Fetch updated employee
                     updated_employee = await employees_collection.find_one({"_id": existing_employee["_id"]})
                     
+                    # Return employee AND temp_password in data
                     return success_response(
-                        data=Employee.from_mongo(updated_employee),
+                        data={
+                            "employee": Employee.from_mongo(updated_employee),
+                            "temp_password": temp_password
+                        },
                         message="Employee reactivated. A new temporary password has been sent.",
-                        code=200,
-                        extra={"temp_password": temp_password}  # Include password for frontend email
+                        code=200
                     )
             else:
                 # User exists but not linked to any employee - create employee with password reset
@@ -302,10 +301,12 @@ async def create_employee(employee: Employee):
                 new_employee = await employees_collection.find_one({"_id": result.inserted_id})
                 
                 return success_response(
-                    data=Employee.from_mongo(new_employee),
+                    data={
+                        "employee": Employee.from_mongo(new_employee),
+                        "temp_password": temp_password
+                    },
                     message="Employee created (existing user). A temporary password has been sent.",
-                    code=201,
-                    extra={"temp_password": temp_password}
+                    code=201
                 )
         else:
             # No existing user - create both user and employee
@@ -336,10 +337,12 @@ async def create_employee(employee: Employee):
             new_employee = await employees_collection.find_one({"_id": emp_result.inserted_id})
             
             return success_response(
-                data=Employee.from_mongo(new_employee),
+                data={
+                    "employee": Employee.from_mongo(new_employee),
+                    "temp_password": temp_password
+                },
                 message="New employee created. A temporary password has been sent.",
-                code=201,
-                extra={"temp_password": temp_password}
+                code=201
             )
             
     except Exception as e:
