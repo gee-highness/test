@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi import APIRouter, HTTPException, Depends, status, Body
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from app.database import get_collection
 from app.models.hr import Employee
@@ -8,8 +8,10 @@ from bson import ObjectId
 import bcrypt
 import jwt
 import os
+import secrets
+import string
 from datetime import datetime, timedelta
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 router = APIRouter(prefix="/api", tags=["auth"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login")
@@ -27,6 +29,8 @@ def hash_password(password: str) -> str:
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a stored password against one provided by user."""
+    if not hashed_password:
+        return False
     if not hashed_password.startswith("$2b$"):
         return plain_password == hashed_password
     return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
@@ -42,6 +46,11 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode.update({"exp": expire, "iat": datetime.utcnow()})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
+def generate_random_password(length: int = 12) -> str:
+    """Generate a secure random password."""
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 async def _fetch_and_enrich_employee_data(employee_id: str) -> Dict[str, Any]:
     """
@@ -75,11 +84,10 @@ async def _fetch_and_enrich_employee_data(employee_id: str) -> Dict[str, Any]:
                 "landing_page": main_access_role.get("landing_page", "")
             }
         
-        # 2. Get all access roles for the employee - FIXED: Use await instead of async for
+        # 2. Get all access roles for the employee
         employee_access_roles: List[Dict] = []
         role_ids = [ObjectId(rid) for rid in employee.get("access_role_ids", [])]
         if role_ids:
-            # FIX: Use await and iterate over the list result
             roles = await access_roles_collection.find({"_id": {"$in": role_ids}})
             for role in roles:
                 employee_access_roles.append({
@@ -102,7 +110,6 @@ async def debug_users():
     try:
         users_collection = get_collection("users")
         users = []
-        # FIX: Use await and iterate over list
         user_docs = await users_collection.find()
         for user in user_docs:
             users.append({
@@ -111,6 +118,7 @@ async def debug_users():
                 "email": user.get("email"),
                 "has_password": bool(user.get("password")),
                 "password_length": len(user.get("password", "")),
+                "password_changed": user.get("password_changed", True),
                 "password_prefix": user.get("password", "")[:10] + "..." if user.get("password") else None
             })
         return success_response(data=users)
@@ -197,6 +205,9 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         if not password_valid:
             return error_response(message="Invalid credentials", code=401)
         
+        # Check if password needs to be changed
+        password_changed = user.get("password_changed", True)  # Default to True for existing users
+        
         # Find employee linked to this user
         employees_collection = get_collection("employees")
         employee = await employees_collection.find_one({"user_id": str(user["_id"])})
@@ -215,16 +226,200 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
             "user_id": str(user["_id"]),
             "employee_id": employee_id,
             "store_id": enriched_employee_data.get("store_id", ""),
-            "roles": enriched_employee_data.get("access_role_ids", [])
+            "roles": enriched_employee_data.get("access_role_ids", []),
+            "password_changed": password_changed  # Add to token
         })
         
         return success_response(data={
             "access_token": access_token,
             "token_type": "bearer",
-            "employee": enriched_employee_data
+            "employee": enriched_employee_data,
+            "password_changed": password_changed  # Return to frontend
         })
     except HTTPException as e:
         return error_response(message=str(e.detail), code=e.status_code)
+    except Exception as e:
+        return handle_generic_exception(e)
+
+@router.post("/change-password", response_model=StandardResponse[dict])
+async def change_password(
+    user_id: str = Body(...),
+    current_password: Optional[str] = Body(None),
+    new_password: str = Body(...),
+    confirm_password: str = Body(...)
+):
+    """
+    Change user password.
+    For first-time login, current_password is not required.
+    For subsequent changes, current_password is required.
+    """
+    try:
+        users_collection = get_collection("users")
+        
+        # Find user
+        user = await users_collection.find_one({"_id": ObjectId(user_id)})
+        
+        if not user:
+            return error_response(message="User not found", code=404)
+        
+        # Validate new password
+        if len(new_password) < 8:
+            return error_response(
+                message="Password must be at least 8 characters long",
+                code=400
+            )
+        
+        if new_password != confirm_password:
+            return error_response(message="Passwords do not match", code=400)
+        
+        # Check if this is a password change after first login
+        is_first_login = not user.get("password_changed", True)
+        
+        # If not first login, verify current password
+        if not is_first_login:
+            if not current_password:
+                return error_response(
+                    message="Current password is required",
+                    code=400
+                )
+            
+            password_valid = verify_password(current_password, user.get("password", ""))
+            if not password_valid:
+                return error_response(
+                    message="Current password is incorrect",
+                    code=401
+                )
+        
+        # Hash and update password
+        hashed_password = hash_password(new_password)
+        
+        result = await users_collection.update_one(
+            {"_id": ObjectId(user_id)},
+            {
+                "$set": {
+                    "password": hashed_password,
+                    "password_changed": True,
+                    "password_updated_at": datetime.utcnow().isoformat()
+                }
+            }
+        )
+        
+        if result.modified_count == 0:
+            return error_response(message="Failed to update password", code=500)
+        
+        return success_response(
+            data={
+                "message": "Password changed successfully",
+                "is_first_login": False
+            },
+            message="Password changed successfully"
+        )
+        
+    except Exception as e:
+        return handle_generic_exception(e)
+
+@router.post("/reset-password-request", response_model=StandardResponse[dict])
+async def reset_password_request(email: str = Body(...)):
+    """
+    Request password reset. Sends reset link via email (placeholder).
+    """
+    try:
+        users_collection = get_collection("users")
+        
+        user = await users_collection.find_one({"email": email})
+        
+        if not user:
+            # Don't reveal that user doesn't exist for security
+            return success_response(
+                data=None,
+                message="If an account exists with that email, a password reset link has been sent."
+            )
+        
+        # Generate reset token (you can store this in database)
+        reset_token = generate_random_password(32)
+        
+        # Store reset token with expiration (15 minutes)
+        await users_collection.update_one(
+            {"_id": user["_id"]},
+            {
+                "$set": {
+                    "reset_token": reset_token,
+                    "reset_token_expires": (datetime.utcnow() + timedelta(minutes=15)).isoformat()
+                }
+            }
+        )
+        
+        # Here you would send an email with the reset link
+        # reset_link = f"{FRONTEND_URL}/reset-password?token={reset_token}"
+        
+        return success_response(
+            data={
+                "reset_token": reset_token,  # Only for development, remove in production
+                "message": "Password reset email sent"
+            },
+            message="If an account exists with that email, a password reset link has been sent."
+        )
+        
+    except Exception as e:
+        return handle_generic_exception(e)
+
+@router.post("/reset-password", response_model=StandardResponse[dict])
+async def reset_password(
+    token: str = Body(...),
+    new_password: str = Body(...),
+    confirm_password: str = Body(...)
+):
+    """
+    Reset password using reset token.
+    """
+    try:
+        users_collection = get_collection("users")
+        
+        # Validate passwords
+        if len(new_password) < 8:
+            return error_response(
+                message="Password must be at least 8 characters long",
+                code=400
+            )
+        
+        if new_password != confirm_password:
+            return error_response(message="Passwords do not match", code=400)
+        
+        # Find user by reset token
+        user = await users_collection.find_one({
+            "reset_token": token,
+            "reset_token_expires": {"$gt": datetime.utcnow().isoformat()}
+        })
+        
+        if not user:
+            return error_response(
+                message="Invalid or expired reset token",
+                code=400
+            )
+        
+        # Hash and update password
+        hashed_password = hash_password(new_password)
+        
+        await users_collection.update_one(
+            {"_id": user["_id"]},
+            {
+                "$set": {
+                    "password": hashed_password,
+                    "password_changed": True,
+                    "password_updated_at": datetime.utcnow().isoformat()
+                },
+                "$unset": {
+                    "reset_token": "",
+                    "reset_token_expires": ""
+                }
+            }
+        )
+        
+        return success_response(
+            data=None,
+            message="Password has been reset successfully. You can now log in with your new password."
+        )
+        
     except Exception as e:
         return handle_generic_exception(e)
 
@@ -275,62 +470,58 @@ async def refresh_token(current_employee: Dict[str, Any] = Depends(get_current_e
         if not user:
             return error_response(message="User not found", code=404)
         
+        # Get password_changed status
+        password_changed = user.get("password_changed", True)
+        
         access_token = create_access_token(data={
             "sub": user["email"], 
             "user_id": str(user["_id"]),
             "employee_id": current_employee.get("id"),
             "store_id": current_employee.get("store_id", ""),
-            "roles": current_employee.get("access_role_ids", [])
+            "roles": current_employee.get("access_role_ids", []),
+            "password_changed": password_changed
         })
         
         return success_response(data={
             "access_token": access_token,
             "token_type": "bearer",
-            "employee": current_employee
+            "employee": current_employee,
+            "password_changed": password_changed
         })
     except Exception as e:
         return handle_generic_exception(e)
 
 @router.post("/forgot-password", response_model=StandardResponse[dict])
-async def forgot_password(email: str):
+async def forgot_password(email: str = Body(...)):
     """Initiates the password reset process."""
-    try:
-        users_collection = get_collection("users")
-        user = await users_collection.find_one({"email": email})
-        
-        if user:
-            # Placeholder for password reset logic
-            pass
-        
-        # Always return the same message for security
-        return success_response(
-            data=None,
-            message="If an account with that email exists, a password reset link has been sent."
-        )
-    except Exception as e:
-        return handle_generic_exception(e)
-
-@router.post("/reset-password", response_model=StandardResponse[dict])
-async def reset_password(token: str, new_password: str):
-    """Processes the password reset request using the token."""
-    try:
-        # Placeholder for password reset logic
-        return success_response(
-            data=None,
-            message="If the token is valid, your password has been reset successfully."
-        )
-    except Exception as e:
-        return handle_generic_exception(e)
+    return await reset_password_request(email)
 
 @router.get("/verify-token", response_model=StandardResponse[dict])
 async def verify_token(current_employee: Dict[str, Any] = Depends(get_current_employee_full)):
     """Used by the frontend to verify if the token is still valid."""
-    return success_response(data={
-        "valid": True,
-        "employee_id": current_employee.get("id"),
-        "store_id": current_employee.get("store_id"),
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
-    })
+    # Get the token from the request
+    token = await oauth2_scheme(request)
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        password_changed = payload.get("password_changed", True)
+        
+        return success_response(data={
+            "valid": True,
+            "employee_id": current_employee.get("id"),
+            "store_id": current_employee.get("store_id"),
+            "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            "password_changed": password_changed
+        })
+    except jwt.ExpiredSignatureError:
+        return success_response(data={
+            "valid": False,
+            "message": "Token expired"
+        })
+    except jwt.JWTError:
+        return success_response(data={
+            "valid": False,
+            "message": "Invalid token"
+        })
 
 @router.get("/health")
 async def auth_health_check():
