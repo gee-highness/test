@@ -31,26 +31,31 @@ app = FastAPI(
 
 
 
-# CORS Configuration
+# CORS Configuration - Flexible for development
 origins_env = os.getenv("ALLOWED_ORIGINS", "")
-if origins_env:
-    origins = [origin.strip() for origin in origins_env.split(",") if origin.strip()]
+if origins_env == "*":
+    # For development - allow all
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 else:
-    origins = [
+    # For production - use specific origins
+    origins = [origin.strip() for origin in origins_env.split(",") if origin.strip()] if origins_env else [
         "http://localhost:3000",
-        "http://127.0.0.1:3000", 
-        "http://localhost:8000",
+        "http://127.0.0.1:3000",
         "https://carte-pos.vercel.app",
-        "https://carte-fastapi.vercel.app"
     ]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allow_headers=["*"],
-)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+        allow_headers=["*"],
+    )
 
 # === CRITICAL: REORDER ROUTERS ===
 # Put specific routers BEFORE generic core router to avoid conflicts
