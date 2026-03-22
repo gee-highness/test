@@ -14,6 +14,13 @@ from bson import ObjectId
 from datetime import datetime, timedelta
 import asyncio
 
+import secrets
+import string
+
+def generate_temporary_password(length: int = 12) -> str:
+    """Generate a secure random password."""
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 RECURRENCE_WEEKS = 52 # Create shifts for one year
 
@@ -192,18 +199,149 @@ async def get_employee(employee_id: str):
 
 @router.post("/employees", response_model=StandardResponse[EmployeeResponse])
 async def create_employee(employee: Employee):
-    """Create a new employee record."""
+    """
+    Create a new employee record with proper user management.
+    - If user with email exists and is active -> return conflict
+    - If user with email exists and employee is inactive -> reactivate, reset password, send email
+    - If user exists but no employee -> create employee, reset password, send email
+    - If no user exists -> create both user and employee, generate password, send email
+    """
     try:
+        from app.routes.auth import hash_password
+        users_collection = get_collection("users")
         employees_collection = get_collection("employees")
-        employee_dict = to_mongo_dict(employee)
+
+        # Validate email presence
+        if not employee.email:
+            return error_response(message="Email is required for employee creation", code=400)
+
+        # Generate temporary password (used for all cases except active employee conflict)
+        temp_password = None
+        hashed_password = None
+
+        # Check if a user with this email exists
+        existing_user = await users_collection.find_one({"email": employee.email})
         
-        result = await employees_collection.insert_one(employee_dict)
-        new_employee = await employees_collection.find_one({"_id": result.inserted_id})
-        return success_response(
-            data=Employee.from_mongo(new_employee),
-            message="Employee created successfully",
-            code=201
-        )
+        if existing_user:
+            user_id = str(existing_user["_id"])
+            
+            # Check if this user is already linked to an employee
+            existing_employee = await employees_collection.find_one({"user_id": user_id})
+            
+            if existing_employee:
+                # An employee already exists for this user
+                current_status = existing_employee.get("status", {}).get("current_status", "active")
+                
+                if current_status == "active":
+                    return error_response(
+                        message=f"An active employee with email {employee.email} already exists.",
+                        code=409
+                    )
+                else:
+                    # Inactive employee - reactivate and reset password
+                    temp_password = generate_temporary_password()
+                    hashed_password = hash_password(temp_password)
+                    
+                    # Update user password
+                    await users_collection.update_one(
+                        {"_id": ObjectId(user_id)},
+                        {"$set": {
+                            "password": hashed_password,
+                            "password_changed": False,
+                            "password_updated_at": datetime.utcnow().isoformat()
+                        }}
+                    )
+                    
+                    # Update employee data
+                    update_data = to_mongo_update_dict(employee, exclude_unset=True)
+                    update_data.pop("_id", None)
+                    update_data.pop("created_at", None)
+                    update_data["user_id"] = user_id
+                    update_data["status"] = {"current_status": "active"}
+                    update_data["updated_at"] = datetime.utcnow()
+                    update_data.pop("email", None)
+                    
+                    await employees_collection.update_one(
+                        {"_id": existing_employee["_id"]},
+                        {"$set": update_data}
+                    )
+                    
+                    # Fetch updated employee
+                    updated_employee = await employees_collection.find_one({"_id": existing_employee["_id"]})
+                    
+                    return success_response(
+                        data=Employee.from_mongo(updated_employee),
+                        message="Employee reactivated. A new temporary password has been sent.",
+                        code=200,
+                        extra={"temp_password": temp_password}  # Include password for frontend email
+                    )
+            else:
+                # User exists but not linked to any employee - create employee with password reset
+                temp_password = generate_temporary_password()
+                hashed_password = hash_password(temp_password)
+                
+                # Update user password (they're getting employee access for the first time)
+                await users_collection.update_one(
+                    {"_id": ObjectId(user_id)},
+                    {"$set": {
+                        "password": hashed_password,
+                        "password_changed": False,
+                        "password_updated_at": datetime.utcnow().isoformat()
+                    }}
+                )
+                
+                # Create employee
+                employee_dict = to_mongo_dict(employee)
+                employee_dict["user_id"] = user_id
+                employee_dict["status"] = {"current_status": "active"}
+                employee_dict["created_at"] = datetime.utcnow()
+                employee_dict["updated_at"] = datetime.utcnow()
+                employee_dict.pop("email", None)
+                
+                result = await employees_collection.insert_one(employee_dict)
+                new_employee = await employees_collection.find_one({"_id": result.inserted_id})
+                
+                return success_response(
+                    data=Employee.from_mongo(new_employee),
+                    message="Employee created (existing user). A temporary password has been sent.",
+                    code=201,
+                    extra={"temp_password": temp_password}
+                )
+        else:
+            # No existing user - create both user and employee
+            temp_password = generate_temporary_password()
+            hashed_password = hash_password(temp_password)
+            
+            # Create user
+            user_payload = {
+                "email": employee.email,
+                "username": employee.email.split("@")[0],
+                "first_name": employee.first_name,
+                "last_name": employee.last_name or "",
+                "password": hashed_password,
+                "password_changed": False,
+            }
+            user_result = await users_collection.insert_one(user_payload)
+            user_id = str(user_result.inserted_id)
+            
+            # Create employee
+            employee_dict = to_mongo_dict(employee)
+            employee_dict["user_id"] = user_id
+            employee_dict["status"] = {"current_status": "active"}
+            employee_dict["created_at"] = datetime.utcnow()
+            employee_dict["updated_at"] = datetime.utcnow()
+            employee_dict.pop("email", None)
+            
+            emp_result = await employees_collection.insert_one(employee_dict)
+            new_employee = await employees_collection.find_one({"_id": emp_result.inserted_id})
+            
+            return success_response(
+                data=Employee.from_mongo(new_employee),
+                message="New employee created. A temporary password has been sent.",
+                code=201,
+                extra={"temp_password": temp_password}
+            )
+            
     except Exception as e:
         return handle_generic_exception(e)
 
