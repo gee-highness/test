@@ -93,9 +93,6 @@ class Employee(MongoModel):
     contact_details: Optional[ContactDetails] = None
     employment_details: Optional[EmploymentDetails] = None
     status: Optional[EmployeeStatus] = None
-
-    # NEW: email used for user creation/lookup (not stored in employee document)
-    email: Optional[str] = None
     
     def to_response_dict(self) -> dict:
         """Convert Employee to dictionary for response with proper nested object handling"""

@@ -14,13 +14,6 @@ from bson import ObjectId
 from datetime import datetime, timedelta
 import asyncio
 
-import secrets
-import string
-
-def generate_temporary_password(length: int = 12) -> str:
-    """Generate a secure random password."""
-    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
-    return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 RECURRENCE_WEEKS = 52 # Create shifts for one year
 
@@ -197,154 +190,20 @@ async def get_employee(employee_id: str):
     except Exception:
         return error_response(message="Invalid ID format for employee", code=400)
 
-@router.post("/employees", response_model=StandardResponse[Dict[str, Any]])  # Change response_model to Dict
+@router.post("/employees", response_model=StandardResponse[EmployeeResponse])
 async def create_employee(employee: Employee):
-    """
-    Create a new employee record with proper user management.
-    """
+    """Create a new employee record."""
     try:
-        from app.routes.auth import hash_password
-        users_collection = get_collection("users")
         employees_collection = get_collection("employees")
-
-        # Validate email presence
-        if not employee.email:
-            return error_response(message="Email is required for employee creation", code=400)
-
-        # Generate temporary password (used for all cases except active employee conflict)
-        temp_password = None
-        hashed_password = None
-
-        # Check if a user with this email exists
-        existing_user = await users_collection.find_one({"email": employee.email})
+        employee_dict = to_mongo_dict(employee)
         
-        if existing_user:
-            user_id = str(existing_user["_id"])
-            
-            # Check if this user is already linked to an employee
-            existing_employee = await employees_collection.find_one({"user_id": user_id})
-            
-            if existing_employee:
-                # An employee already exists for this user
-                current_status = existing_employee.get("status", {}).get("current_status", "active")
-                
-                if current_status == "active":
-                    return error_response(
-                        message=f"An active employee with email {employee.email} already exists.",
-                        code=409
-                    )
-                else:
-                    # Inactive employee - reactivate and reset password
-                    temp_password = generate_temporary_password()
-                    hashed_password = hash_password(temp_password)
-                    
-                    # Update user password
-                    await users_collection.update_one(
-                        {"_id": ObjectId(user_id)},
-                        {"$set": {
-                            "password": hashed_password,
-                            "password_changed": False,
-                            "password_updated_at": datetime.utcnow().isoformat()
-                        }}
-                    )
-                    
-                    # Update employee data
-                    update_data = to_mongo_update_dict(employee, exclude_unset=True)
-                    update_data.pop("_id", None)
-                    update_data.pop("created_at", None)
-                    update_data["user_id"] = user_id
-                    update_data["status"] = {"current_status": "active"}
-                    update_data["updated_at"] = datetime.utcnow()
-                    update_data.pop("email", None)
-                    
-                    await employees_collection.update_one(
-                        {"_id": existing_employee["_id"]},
-                        {"$set": update_data}
-                    )
-                    
-                    # Fetch updated employee
-                    updated_employee = await employees_collection.find_one({"_id": existing_employee["_id"]})
-                    
-                    # Return employee AND temp_password in data
-                    return success_response(
-                        data={
-                            "employee": Employee.from_mongo(updated_employee),
-                            "temp_password": temp_password
-                        },
-                        message="Employee reactivated. A new temporary password has been sent.",
-                        code=200
-                    )
-            else:
-                # User exists but not linked to any employee - create employee with password reset
-                temp_password = generate_temporary_password()
-                hashed_password = hash_password(temp_password)
-                
-                # Update user password (they're getting employee access for the first time)
-                await users_collection.update_one(
-                    {"_id": ObjectId(user_id)},
-                    {"$set": {
-                        "password": hashed_password,
-                        "password_changed": False,
-                        "password_updated_at": datetime.utcnow().isoformat()
-                    }}
-                )
-                
-                # Create employee
-                employee_dict = to_mongo_dict(employee)
-                employee_dict["user_id"] = user_id
-                employee_dict["status"] = {"current_status": "active"}
-                employee_dict["created_at"] = datetime.utcnow()
-                employee_dict["updated_at"] = datetime.utcnow()
-                employee_dict.pop("email", None)
-                
-                result = await employees_collection.insert_one(employee_dict)
-                new_employee = await employees_collection.find_one({"_id": result.inserted_id})
-                
-                return success_response(
-                    data={
-                        "employee": Employee.from_mongo(new_employee),
-                        "temp_password": temp_password
-                    },
-                    message="Employee created (existing user). A temporary password has been sent.",
-                    code=201
-                )
-        else:
-            # No existing user - create both user and employee
-            temp_password = generate_temporary_password()
-            hashed_password = hash_password(temp_password)
-            
-            # Create user
-            user_payload = {
-                "email": employee.email,
-                "username": employee.email.split("@")[0],
-                "first_name": employee.first_name,
-                "last_name": employee.last_name or "",
-                "password": hashed_password,
-                "password_changed": False,
-            }
-            user_result = await users_collection.insert_one(user_payload)
-            user_id = str(user_result.inserted_id)
-            
-            # Create employee
-            employee_dict = to_mongo_dict(employee)
-            employee_dict["user_id"] = user_id
-            employee_dict["status"] = {"current_status": "active"}
-            employee_dict["created_at"] = datetime.utcnow()
-            employee_dict["updated_at"] = datetime.utcnow()
-            employee_dict.pop("email", None)
-            
-            emp_result = await employees_collection.insert_one(employee_dict)
-            new_employee = await employees_collection.find_one({"_id": emp_result.inserted_id})
-            
-            return success_response(
-                data={
-                    "employee": Employee.from_mongo(new_employee),
-                    "temp_password": temp_password
-                },
-                message="New employee created. A temporary password has been sent.",
-                code=201
-            )
-            
+        result = await employees_collection.insert_one(employee_dict)
+        new_employee = await employees_collection.find_one({"_id": result.inserted_id})
+        return success_response(
+            data=Employee.from_mongo(new_employee),
+            message="Employee created successfully",
+            code=201
+        )
     except Exception as e:
         return handle_generic_exception(e)
 
