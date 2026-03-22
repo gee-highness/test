@@ -42,8 +42,7 @@ class MongoModel(BaseModel):
         arbitrary_types_allowed = True
         json_encoders = {
             ObjectId: str,
-            # REMOVE datetime and date string conversion - let them stay as datetime objects
-            datetime: lambda dt: dt.isoformat(),
+            datetime: lambda dt: dt.isoformat() if dt else None,  # Handle None
         }
 
     def to_dict(self, **kwargs) -> dict:
