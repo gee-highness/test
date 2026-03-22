@@ -206,7 +206,8 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
             return error_response(message="Invalid credentials", code=401)
         
         # Check if password needs to be changed
-        password_changed = user.get("password_changed", True)  # Default to True for existing users
+        # CRITICAL: If password_changed is False or doesn't exist, user needs to change password
+        password_changed = user.get("password_changed", False)  # Default to False for new users
         
         # Find employee linked to this user
         employees_collection = get_collection("employees")
@@ -273,7 +274,7 @@ async def change_password(
             return error_response(message="Passwords do not match", code=400)
         
         # Check if this is a password change after first login
-        is_first_login = not user.get("password_changed", True)
+        is_first_login = user.get("password_changed", True) == False
         
         # If not first login, verify current password
         if not is_first_login:
@@ -290,7 +291,7 @@ async def change_password(
                     code=401
                 )
         
-        # Hash and update password
+        # Hash and update password - CRITICAL: Set password_changed to True
         hashed_password = hash_password(new_password)
         
         result = await users_collection.update_one(
@@ -298,7 +299,7 @@ async def change_password(
             {
                 "$set": {
                     "password": hashed_password,
-                    "password_changed": True,
+                    "password_changed": True,  # <-- THIS IS THE KEY FIX
                     "password_updated_at": datetime.utcnow().isoformat()
                 }
             }
@@ -310,7 +311,7 @@ async def change_password(
         return success_response(
             data={
                 "message": "Password changed successfully",
-                "is_first_login": False
+                "password_changed": True
             },
             message="Password changed successfully"
         )
