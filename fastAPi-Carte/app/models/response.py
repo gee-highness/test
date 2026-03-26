@@ -923,6 +923,7 @@ class LoginResponse(BaseModel):
     access_token: str
     token_type: str
     employee: EmployeeResponse
+    password_changed: bool
 
 class ReportResponse(BaseModel):
     model_config = ConfigDict(
