@@ -22,6 +22,32 @@ from datetime import datetime
 import math
 import asyncio  # ADD THIS IMPORT
 
+# Add this after the imports section, before the router = APIRouter(...) line
+
+# Counter collection for atomic order number generation
+async def get_next_order_number(store_id: str) -> int:
+    """Get next sequential order number for a store"""
+    counters_collection = get_collection("order_counters")
+    
+    # Find and increment counter atomically
+    result = await counters_collection.find_one_and_update(
+        {"store_id": store_id},
+        {"$inc": {"current_number": 1}},
+        upsert=True,
+        return_document=True
+    )
+    
+    if result and "current_number" in result:
+        return result["current_number"]
+    
+    # First order for this store
+    await counters_collection.update_one(
+        {"store_id": store_id},
+        {"$set": {"current_number": 1}},
+        upsert=True
+    )
+    return 1
+
 router = APIRouter(prefix="/api", tags=["core"])
 
 # --- Generic CRUD Helper Functions ---
@@ -260,6 +286,11 @@ async def get_order(order_id: str):
         order_instance = Order.from_mongo(order)
         order_dict = order_instance.model_dump()
         
+        # Ensure order_number exists
+        if "order_number" not in order_dict:
+            order_dict["order_number"] = None
+            order_dict["display_id"] = f"#{order_dict['id'][-8:]}"
+        
         # Add related data
         if payment_attempts:
             order_dict["payment_attempts"] = [
@@ -305,6 +336,16 @@ async def create_order(order: Order):
         orders_collection = get_collection("orders")
         inventory_collection = get_collection("inventory_products")
         
+        # ========== NEW: Generate sequential order number ==========
+        store_id = order.store_id
+        if not store_id:
+            # Try to get from the first item or use a default
+            # You may want to pass store_id in the request
+            store_id = "default"
+        
+        order_number = await get_next_order_number(store_id)
+        # ========== END NEW ==========
+        
         # Generate order ID
         order_id = str(ObjectId())
         
@@ -326,11 +367,16 @@ async def create_order(order: Order):
         order_dict["_id"] = ObjectId(order_id)  # Set the order ID
         order_dict["id"] = order_id  # Also include in the dict
         
+        # ========== NEW: Add order number fields ==========
+        order_dict["order_number"] = order_number
+        order_dict["display_id"] = f"#{order_number}"
+        # ========== END NEW ==========
+        
         # Set timestamps
         order_dict["created_at"] = datetime.utcnow().isoformat()
         order_dict["updated_at"] = datetime.utcnow().isoformat()
         
-        # Check inventory and collect stock warnings
+        # Check inventory and collect stock warnings (existing code continues...)
         stock_warnings = []
         inventory_updates = []
         
@@ -384,7 +430,7 @@ async def create_order(order: Order):
         
         return success_response(
             data=order_data,
-            message="Order created successfully",
+            message=f"Order #{order_number} created successfully",
             code=201
         )
     except Exception as e:
@@ -693,6 +739,12 @@ async def get_orders(
                 if field in item_dict and item_dict[field]:
                     if isinstance(item_dict[field], datetime):
                         item_dict[field] = item_dict[field].isoformat()
+            
+            # Ensure order_number exists (for older orders without it)
+            if "order_number" not in item_dict:
+                # Fallback to using last 8 chars of ID
+                item_dict["order_number"] = None
+                item_dict["display_id"] = f"#{item_dict['id'][-8:]}"
             
             items.append(item_dict)
         
