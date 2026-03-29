@@ -745,6 +745,142 @@ async def orders_id_options():
         "access-control-allow-headers": "*"
     }
 
+@router.post("/orders/{order_id}/resolve_stock", response_model=StandardResponse[dict])
+async def resolve_pending_stock(order_id: str):
+    """Attempt to resolve a pending_stock order by checking inventory again and fulfilling if possible"""
+    try:
+        orders_collection = get_collection("orders")
+        inventory_collection = get_collection("inventory_products")
+        foods_collection = get_collection("foods")
+        
+        # Validate ObjectId format
+        if not ObjectId.is_valid(order_id):
+            return error_response(message="Invalid order ID format", code=400)
+        
+        # Get the order
+        order = await orders_collection.find_one({"_id": ObjectId(order_id)})
+        if not order:
+            return error_response(message="Order not found", code=404)
+        
+        # Check if order is pending_stock
+        if order.get("status") != "pending_stock":
+            return error_response(
+                message=f"Order status is '{order.get('status')}', not 'pending_stock'",
+                code=400
+            )
+        
+        # Convert order dict to Order model
+        order_obj = Order.from_mongo(order)
+        
+        # Check inventory for each item
+        stock_warnings = []
+        inventory_updates = []
+        all_items_available = True
+        
+        for item in order_obj.items:
+            # Get the food item to check its recipe
+            food = await foods_collection.find_one({"_id": ObjectId(item.food_id)})
+            
+            if not food:
+                stock_warnings.append({
+                    "food_id": item.food_id,
+                    "food_name": item.name,
+                    "error": "Food item not found"
+                })
+                all_items_available = False
+                continue
+            
+            # Check if food has recipes (ingredients)
+            recipes = food.get("recipes", [])
+            if not recipes:
+                # No ingredients - always available
+                continue
+            
+            # Check each ingredient
+            for recipe in recipes:
+                inventory_product = await inventory_collection.find_one(
+                    {"_id": ObjectId(recipe["inventory_product_id"])}
+                )
+                
+                if not inventory_product:
+                    stock_warnings.append({
+                        "product_id": recipe["inventory_product_id"],
+                        "product_name": "Unknown",
+                        "required": recipe["quantity_used"] * item.quantity,
+                        "available": 0,
+                        "shortage": recipe["quantity_used"] * item.quantity,
+                        "food_name": item.name
+                    })
+                    all_items_available = False
+                    continue
+                
+                required_quantity = recipe["quantity_used"] * item.quantity
+                current_stock = inventory_product.get("quantity_in_stock", 0)
+                
+                if current_stock < required_quantity:
+                    stock_warnings.append({
+                        "product_id": recipe["inventory_product_id"],
+                        "product_name": inventory_product.get("name", "Unknown"),
+                        "required": required_quantity,
+                        "available": current_stock,
+                        "shortage": required_quantity - current_stock,
+                        "food_name": item.name
+                    })
+                    all_items_available = False
+                
+                # Track inventory updates (even if currently insufficient)
+                inventory_updates.append({
+                    "product_id": recipe["inventory_product_id"],
+                    "quantity_change": -required_quantity
+                })
+        
+        # If all items are available, fulfill the order
+        if all_items_available:
+            # Update inventory quantities
+            for update in inventory_updates:
+                await inventory_collection.update_one(
+                    {"_id": ObjectId(update["product_id"])},
+                    {"$inc": {"quantity_in_stock": update["quantity_change"]}}
+                )
+            
+            # Update order status to preparing
+            result = await orders_collection.update_one(
+                {"_id": ObjectId(order_id)},
+                {
+                    "$set": {
+                        "status": "preparing",
+                        "updated_at": datetime.utcnow().isoformat(),
+                        "stock_resolved_at": datetime.utcnow().isoformat()
+                    }
+                }
+            )
+            
+            # Fetch updated order
+            updated_order = await orders_collection.find_one({"_id": ObjectId(order_id)})
+            
+            return success_response(
+                data={
+                    "order": Order.from_mongo(updated_order).dict(),
+                    "message": "Order resolved successfully and moved to preparing",
+                    "stock_deducted": True
+                }
+            )
+        else:
+            # Still insufficient stock
+            return success_response(
+                data={
+                    "order_id": order_id,
+                    "status": "still_pending",
+                    "stock_warnings": stock_warnings,
+                    "message": f"Cannot fulfill order. {len(stock_warnings)} ingredient(s) have insufficient stock.",
+                    "stock_deducted": False
+                }
+            )
+            
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return error_response(message=str(e), code=500)
 
 # --------------------------
 # --- Categories Endpoints ---
