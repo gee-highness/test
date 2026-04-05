@@ -25,7 +25,8 @@ async def get_departments(store_id: Optional[str] = Query(None)):
     try:
         departments_collection = get_collection("departments")
         query = {"store_id": store_id} if store_id else {}
-        docs = await departments_collection.find(query).to_list(length=None)
+        cursor = departments_collection.find(query)
+        docs = await cursor.to_list(length=None)
         departments = [Department.from_mongo(doc) for doc in docs]
         return success_response(data=departments)
     except Exception as e:
@@ -99,7 +100,8 @@ async def get_employees(store_id: Optional[str] = Query(None)):
     try:
         employees_collection = get_collection("employees")
         query = {"store_id": store_id} if store_id else {}
-        docs = await employees_collection.find(query).to_list(length=None)
+        cursor = employees_collection.find(query)
+        docs = await cursor.to_list(length=None)
         employees = [Employee.from_mongo(doc) for doc in docs]
         return success_response(data=employees)
     except Exception as e:
@@ -172,7 +174,8 @@ async def get_access_roles():
     """Retrieve all defined access roles."""
     try:
         access_roles_collection = get_collection("access_roles")
-        docs = await access_roles_collection.find().to_list(length=None)
+        cursor = access_roles_collection.find()
+        docs = await cursor.to_list(length=None)
         roles = [AccessRole.from_mongo(doc) for doc in docs]
         return success_response(data=roles)
     except Exception as e:
@@ -246,7 +249,8 @@ async def get_job_titles(store_id: Optional[str] = Query(None)):
     try:
         job_titles_collection = get_collection("job_titles")
         query = {"store_id": store_id} if store_id else {}
-        docs = await job_titles_collection.find(query).to_list(length=None)
+        cursor = job_titles_collection.find(query)
+        docs = await cursor.to_list(length=None)
         titles = [JobTitle.from_mongo(doc) for doc in docs]
         return success_response(data=titles)
     except Exception as e:
@@ -325,7 +329,8 @@ async def get_shifts(employee_id: Optional[str] = Query(None), active: Optional[
         if active is not None:
             query["active"] = active
         
-        docs = await shifts_collection.find(query).to_list(length=None)
+        cursor = shifts_collection.find(query)
+        docs = await cursor.to_list(length=None)
         shifts = [Shift.from_mongo(doc) for doc in docs]
         return success_response(data=shifts)
     except Exception as e:
@@ -443,7 +448,8 @@ async def get_timesheet_entries(
             except ValueError:
                 return error_response(message="Invalid date format. Use ISO 8601 format.", code=400)
         
-        docs = await ts_collection.find(query).to_list(length=None)
+        cursor = ts_collection.find(query)
+        docs = await cursor.to_list(length=None)
         entries = [TimesheetEntry.from_mongo(doc) for doc in docs]
         return success_response(data=entries)
     except Exception as e:
@@ -625,7 +631,8 @@ async def get_payroll_entries(
         if status:
             query["status"] = status
         
-        docs = await payroll_collection.find(query).to_list(length=None)
+        cursor = payroll_collection.find(query)
+        docs = await cursor.to_list(length=None)
         payroll_list = [Payroll.from_mongo(doc) for doc in docs]
         return success_response(data=payroll_list)
     except Exception as e:
