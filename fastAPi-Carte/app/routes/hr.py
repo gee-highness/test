@@ -16,6 +16,12 @@ import asyncio
 
 router = APIRouter(prefix="/api", tags=["hr"])
 
+async def to_list_or_direct(result):
+    """Helper to handle both cursor and list returns from find()"""
+    if hasattr(result, 'to_list'):
+        return await result.to_list(length=None)
+    return result
+
 # -----------------
 # Department endpoints
 # -----------------
@@ -25,8 +31,8 @@ async def get_departments(store_id: Optional[str] = Query(None)):
     try:
         departments_collection = get_collection("departments")
         query = {"store_id": store_id} if store_id else {}
-        cursor = await departments_collection.find(query)
-        docs = await cursor.to_list(length=None)
+        result = await departments_collection.find(query)
+        docs = await to_list_or_direct(result)
         departments = [Department.from_mongo(doc) for doc in docs]
         return success_response(data=departments)
     except Exception as e:
@@ -100,8 +106,8 @@ async def get_employees(store_id: Optional[str] = Query(None)):
     try:
         employees_collection = get_collection("employees")
         query = {"store_id": store_id} if store_id else {}
-        cursor = await employees_collection.find(query)
-        docs = await cursor.to_list(length=None)
+        result = await employees_collection.find(query)
+        docs = await to_list_or_direct(result)
         employees = [Employee.from_mongo(doc) for doc in docs]
         return success_response(data=employees)
     except Exception as e:
@@ -174,8 +180,8 @@ async def get_access_roles():
     """Retrieve all defined access roles."""
     try:
         access_roles_collection = get_collection("access_roles")
-        cursor = await access_roles_collection.find()
-        docs = await cursor.to_list(length=None)
+        result = await access_roles_collection.find()
+        docs = await to_list_or_direct(result)
         roles = [AccessRole.from_mongo(doc) for doc in docs]
         return success_response(data=roles)
     except Exception as e:
@@ -249,8 +255,8 @@ async def get_job_titles(store_id: Optional[str] = Query(None)):
     try:
         job_titles_collection = get_collection("job_titles")
         query = {"store_id": store_id} if store_id else {}
-        cursor = await job_titles_collection.find(query)
-        docs = await cursor.to_list(length=None)
+        result = await job_titles_collection.find(query)
+        docs = await to_list_or_direct(result)
         titles = [JobTitle.from_mongo(doc) for doc in docs]
         return success_response(data=titles)
     except Exception as e:
@@ -329,8 +335,8 @@ async def get_shifts(employee_id: Optional[str] = Query(None), active: Optional[
         if active is not None:
             query["active"] = active
         
-        cursor = await shifts_collection.find(query)
-        docs = await cursor.to_list(length=None)
+        result = await shifts_collection.find(query)
+        docs = await to_list_or_direct(result)
         shifts = [Shift.from_mongo(doc) for doc in docs]
         return success_response(data=shifts)
     except Exception as e:
@@ -448,8 +454,8 @@ async def get_timesheet_entries(
             except ValueError:
                 return error_response(message="Invalid date format. Use ISO 8601 format.", code=400)
         
-        cursor = await ts_collection.find(query)
-        docs = await cursor.to_list(length=None)
+        result = await ts_collection.find(query)
+        docs = await to_list_or_direct(result)
         entries = [TimesheetEntry.from_mongo(doc) for doc in docs]
         return success_response(data=entries)
     except Exception as e:
@@ -642,8 +648,8 @@ async def get_payroll_entries(
         if status:
             query["status"] = status
         
-        cursor = await payroll_collection.find(query)
-        docs = await cursor.to_list(length=None)
+        result = await payroll_collection.find(query)
+        docs = await to_list_or_direct(result)
         payroll_list = [Payroll.from_mongo(doc) for doc in docs]
         return success_response(data=payroll_list)
     except Exception as e:
@@ -768,7 +774,11 @@ async def get_payroll_settings(store_id: Optional[str] = Query(None)):
                 benefits_rate=0.05
             )
             return success_response(data=default_settings)
-        return success_response(data=PayrollSettings.from_mongo(settings))
+        
+        result = PayrollSettings.from_mongo(settings)
+        if result is None:
+            return error_response(message="Failed to parse payroll settings", code=500)
+        return success_response(data=result)
     except Exception as e:
         return handle_generic_exception(e)
 
@@ -838,16 +848,20 @@ async def get_or_create_payroll_settings(store_id: str) -> PayrollSettings:
     
     settings_doc = await payroll_settings_collection.find_one({"store_id": store_id})
     if settings_doc:
-        return PayrollSettings.from_mongo(settings_doc)
+        result = PayrollSettings.from_mongo(settings_doc)
+        if result is not None:
+            return result
     
     # Try default settings
     settings_doc = await payroll_settings_collection.find_one({"store_id": "default"})
     if settings_doc:
-        return PayrollSettings.from_mongo(settings_doc)
+        result = PayrollSettings.from_mongo(settings_doc)
+        if result is not None:
+            return result
     
     # Create default settings with ALL new fields
     default_settings = PayrollSettings(
-        store_id="default",
+        store_id=store_id,
         default_payment_cycle="bi-weekly",
         tax_rate=0.20,
         overtime_multiplier=1.5,
