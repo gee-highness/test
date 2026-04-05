@@ -25,7 +25,7 @@ async def get_departments(store_id: Optional[str] = Query(None)):
     try:
         departments_collection = get_collection("departments")
         query = {"store_id": store_id} if store_id else {}
-        cursor = departments_collection.find(query)
+        cursor = await departments_collection.find(query)
         docs = await cursor.to_list(length=None)
         departments = [Department.from_mongo(doc) for doc in docs]
         return success_response(data=departments)
@@ -100,7 +100,7 @@ async def get_employees(store_id: Optional[str] = Query(None)):
     try:
         employees_collection = get_collection("employees")
         query = {"store_id": store_id} if store_id else {}
-        cursor = employees_collection.find(query)
+        cursor = await employees_collection.find(query)
         docs = await cursor.to_list(length=None)
         employees = [Employee.from_mongo(doc) for doc in docs]
         return success_response(data=employees)
@@ -174,7 +174,7 @@ async def get_access_roles():
     """Retrieve all defined access roles."""
     try:
         access_roles_collection = get_collection("access_roles")
-        cursor = access_roles_collection.find()
+        cursor = await access_roles_collection.find()
         docs = await cursor.to_list(length=None)
         roles = [AccessRole.from_mongo(doc) for doc in docs]
         return success_response(data=roles)
@@ -249,7 +249,7 @@ async def get_job_titles(store_id: Optional[str] = Query(None)):
     try:
         job_titles_collection = get_collection("job_titles")
         query = {"store_id": store_id} if store_id else {}
-        cursor = job_titles_collection.find(query)
+        cursor = await job_titles_collection.find(query)
         docs = await cursor.to_list(length=None)
         titles = [JobTitle.from_mongo(doc) for doc in docs]
         return success_response(data=titles)
@@ -329,7 +329,7 @@ async def get_shifts(employee_id: Optional[str] = Query(None), active: Optional[
         if active is not None:
             query["active"] = active
         
-        cursor = shifts_collection.find(query)
+        cursor = await shifts_collection.find(query)
         docs = await cursor.to_list(length=None)
         shifts = [Shift.from_mongo(doc) for doc in docs]
         return success_response(data=shifts)
@@ -448,7 +448,7 @@ async def get_timesheet_entries(
             except ValueError:
                 return error_response(message="Invalid date format. Use ISO 8601 format.", code=400)
         
-        cursor = ts_collection.find(query)
+        cursor = await ts_collection.find(query)
         docs = await cursor.to_list(length=None)
         entries = [TimesheetEntry.from_mongo(doc) for doc in docs]
         return success_response(data=entries)
@@ -493,11 +493,22 @@ async def update_timesheet_entry(entry_id: str, entry: TimesheetEntry):
         # Calculate duration if clock_out is provided
         if entry.clock_out and entry.clock_in:
             try:
-                clock_in = datetime.fromisoformat(entry.clock_in.replace('Z', '+00:00'))
-                clock_out = datetime.fromisoformat(entry.clock_out.replace('Z', '+00:00'))
+                # Convert to datetime objects safely
+                if isinstance(entry.clock_in, str):
+                    # Parse ISO string - Python handles Z as UTC
+                    clock_in = datetime.fromisoformat(entry.clock_in.replace('Z', '+00:00'))
+                else:
+                    clock_in = entry.clock_in
+
+                if isinstance(entry.clock_out, str):
+                    clock_out = datetime.fromisoformat(entry.clock_out.replace('Z', '+00:00'))
+                else:
+                    clock_out = entry.clock_out
+
                 duration = int((clock_out - clock_in).total_seconds() / 60)
                 entry_dict["duration_minutes"] = duration
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, AttributeError) as e:
+                print(f"Error calculating duration: {e}")
                 entry_dict["duration_minutes"] = 0
         
         result = await ts_collection.update_one(
@@ -631,7 +642,7 @@ async def get_payroll_entries(
         if status:
             query["status"] = status
         
-        cursor = payroll_collection.find(query)
+        cursor = await payroll_collection.find(query)
         docs = await cursor.to_list(length=None)
         payroll_list = [Payroll.from_mongo(doc) for doc in docs]
         return success_response(data=payroll_list)
@@ -797,7 +808,10 @@ async def update_payroll_settings(settings_id: str, settings: PayrollSettings):
             existing_obj = PayrollSettings.from_mongo(existing_settings)
             # Update only the fields that are provided
             update_data = settings.model_dump(exclude_unset=True)
-            updated_settings = existing_obj.model_copy(update=update_data)
+            if existing_obj is not None:
+                updated_settings = existing_obj.model_copy(update=update_data)
+            else:
+                updated_settings = settings
         else:
             updated_settings = settings
             
