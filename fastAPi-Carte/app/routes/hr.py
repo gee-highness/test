@@ -15,65 +15,6 @@ from datetime import datetime, timedelta
 import asyncio
 
 
-RECURRENCE_WEEKS = 52 # Create shifts for one year
-
-async def _process_shift_recurrence(shift_data: dict, original_shift_id: ObjectId):
-    """
-    Helper to process recurring shifts by creating future shift instances.
-    """
-    if not shift_data.get("recurring"):
-        return
-
-    # Use the original shift's ID as the series ID to link all instances
-    recurring_series_id = str(original_shift_id)
-    
-    # Extract and parse dates
-    try:
-        # Note: The 'start' and 'end' from MongoDB will be ISO-formatted strings
-        start_dt = datetime.fromisoformat(shift_data["start"])
-        end_dt = datetime.fromisoformat(shift_data["end"])
-    except:
-        # Failsafe for incorrect date format
-        return
-
-    duration = end_dt - start_dt
-    shifts_collection = get_collection("shifts")
-    
-    # Generate future shifts (starting from the week *after* the original shift)
-    for i in range(1, RECURRENCE_WEEKS + 1):
-        new_start_dt = start_dt + timedelta(weeks=i)
-        new_end_dt = new_start_dt + duration
-        
-        # Check against an optional recurrence_end_date
-        recurrence_end_date_str = shift_data.get("recurrence_end_date")
-        if recurrence_end_date_str:
-             try:
-                recurrence_end_date = datetime.fromisoformat(recurrence_end_date_str)
-                # Stop if the new shift starts after the recurrence end date
-                if new_start_dt.date() > recurrence_end_date.date():
-                    break
-             except:
-                pass # Continue if end date is invalid
-        
-        # Create new shift data
-        new_shift_data = shift_data.copy()
-        new_shift_data["start"] = new_start_dt.isoformat()
-        new_shift_data["end"] = new_end_dt.isoformat()
-        
-        # Link to the series
-        new_shift_data["recurring"] = True
-        new_shift_data["recurring_series_id"] = recurring_series_id
-        new_shift_data.pop("_id", None)
-        new_shift_data.pop("id", None)
-        
-        # Create a new Shift model instance and get the dict for MongoDB insertion
-        new_shift_instance = Shift(**new_shift_data)
-        new_shift_mongo_dict = to_mongo_dict(new_shift_instance)
-        
-        # Insert the new recurring shift
-        await shifts_collection.insert_one(new_shift_mongo_dict)
-
-
 
 router = APIRouter(prefix="/api", tags=["hr"])
 
@@ -88,8 +29,8 @@ async def get_departments(store_id: Optional[str] = Query(None)):
         query = {"store_id": store_id} if store_id else {}
         departments = []
         # FIXED: Use await and iterate
-        dept_docs = await departments_collection.find(query)
-        for department in dept_docs:
+        cursor = await departments_collection.find(query)
+        async for department in cursor:
             departments.append(Department.from_mongo(department))
         return success_response(data=departments)
     except Exception as e:
@@ -411,9 +352,12 @@ async def delete_job_title(title_id: str):
 # -----------------
 # Shifts endpoints
 # -----------------
+# ==================== SHIFT ENDPOINTS - CLEAN VERSION ====================
+# Replace ALL shift-related code in hr.py with this:
+
 @router.get("/shifts", response_model=StandardResponse[List[ShiftResponse]])
 async def get_shifts(employee_id: Optional[str] = Query(None), active: Optional[bool] = Query(None)):
-    """Retrieve a list of shifts, optionally filtered by employee_id or active status."""
+    """Get shifts - optionally filtered by employee_id or active status"""
     try:
         shifts_collection = get_collection("shifts")
         query = {}
@@ -421,11 +365,11 @@ async def get_shifts(employee_id: Optional[str] = Query(None), active: Optional[
             query["employee_id"] = employee_id
         if active is not None:
             query["active"] = active
-            
+        
         shifts = []
-        # FIXED: Use await and iterate
-        shift_docs = await shifts_collection.find(query)
-        for shift in shift_docs:
+        # FIX: await the find() coroutine first
+        cursor = await shifts_collection.find(query)
+        async for shift in cursor:
             shifts.append(Shift.from_mongo(shift))
         return success_response(data=shifts)
     except Exception as e:
@@ -433,255 +377,88 @@ async def get_shifts(employee_id: Optional[str] = Query(None), active: Optional[
 
 @router.get("/shifts/{shift_id}", response_model=StandardResponse[ShiftResponse])
 async def get_shift(shift_id: str):
-    """Retrieve a single shift by ID."""
+    """Get a single shift by ID"""
     try:
         shifts_collection = get_collection("shifts")
         shift = await shifts_collection.find_one({"_id": ObjectId(shift_id)})
-        if shift:
-            return success_response(data=Shift.from_mongo(shift))
-        return error_response(message="Shift not found", code=404)
+        if not shift:
+            return error_response(message="Shift not found", code=404)
+        return success_response(data=Shift.from_mongo(shift))
     except Exception:
-        return error_response(message="Invalid ID format for shift", code=400)
-
-async def _create_item(collection_name: str, item: Any, response_model: Any):
-    """Generic helper to create items in collections."""
-    try:
-        collection = get_collection(collection_name)
-        item_dict = to_mongo_dict(item)
-        
-        print(f"🔍 [Backend] Inserting into {collection_name}: {item_dict}")
-        
-        result = await collection.insert_one(item_dict)
-        new_item = await collection.find_one({"_id": result.inserted_id})
-        
-        print(f"🔍 [Backend] Inserted item: {new_item}")
-        
-        # For shifts, we need special handling for recurrence
-        if collection_name == "shifts" and new_item.get("recurring"):
-            shift_id = result.inserted_id
-            
-            # Set recurring_series_id for the original shift
-            await collection.update_one(
-                {"_id": shift_id},
-                {"$set": {"recurring_series_id": str(shift_id)}}
-            )
-            
-            # Fetch updated document
-            new_item = await collection.find_one({"_id": shift_id})
-            
-            # Process recurrence for future shifts
-            await _process_shift_recurrence(new_item, shift_id)
-            
-            # Fetch final document
-            new_item = await collection.find_one({"_id": shift_id})
-        
-        return success_response(
-            data=response_model.from_mongo(new_item),
-            message=f"{collection_name[:-1].title()} created successfully",
-            code=201
-        )
-    except Exception as e:
-        print(f"❌ [Backend] Error in _create_item: {str(e)}")
-        return handle_generic_exception(e)
-
-async def _delete_item(collection_name: str, item_id: str):
-    """Generic helper to delete items from collections."""
-    try:
-        collection = get_collection(collection_name)
-        result = await collection.delete_one({"_id": ObjectId(item_id)})
-        if result.deleted_count == 0:
-            return error_response(message=f"{collection_name[:-1].title()} not found", code=404)
-        return success_response(
-            data=None,
-            message=f"{collection_name[:-1].title()} deleted successfully"
-        )
-    except Exception:
-        return error_response(message=f"Invalid ID format for {collection_name[:-1]}", code=400)
-
-async def _delete_item(collection_name: str, item_id: str):
-    """Generic helper to delete items from collections."""
-    try:
-        collection = get_collection(collection_name)
-        result = await collection.delete_one({"_id": ObjectId(item_id)})
-        if result.deleted_count == 0:
-            return error_response(message=f"{collection_name[:-1].title()} not found", code=404)
-        return success_response(
-            data=None,
-            message=f"{collection_name[:-1].title()} deleted successfully"
-        )
-    except Exception:
-        return error_response(message=f"Invalid ID format for {collection_name[:-1]}", code=400)
+        return error_response(message="Invalid shift ID", code=400)
 
 @router.post("/shifts", response_model=StandardResponse[ShiftResponse])
 async def create_shift(shift: Shift):
-    """Create a new shift, including recurrence logic."""
+    """Create a new shift. For recurring shifts, only stores the base shift."""
     try:
-        # 1. Standard creation
         shifts_collection = get_collection("shifts")
         shift_dict = to_mongo_dict(shift)
         
-        print(f"🔍 [Backend] Inserting shift: {shift_dict}")
-        
         result = await shifts_collection.insert_one(shift_dict)
-        new_shift_doc = await shifts_collection.find_one({"_id": result.inserted_id})
+        new_shift = await shifts_collection.find_one({"_id": result.inserted_id})
         
-        # Convert to Shift model for response
-        new_shift = Shift.from_mongo(new_shift_doc)
-        
-        print(f"🔍 [Backend] Created shift: {new_shift}")
-        
-        # 2. Update original shift with its own id as recurring_series_id and process recurrence
-        if new_shift.recurring:
-            original_shift_id = result.inserted_id
-            
-            # Set the series ID on the original shift
+        # For recurring shifts, set series_id to itself (no future shifts created)
+        if shift.recurring:
             await shifts_collection.update_one(
-                {"_id": original_shift_id},
-                {"$set": {"recurring_series_id": str(original_shift_id)}}
+                {"_id": result.inserted_id},
+                {"$set": {"recurring_series_id": str(result.inserted_id)}}
             )
-            
-            # Fetch the updated doc with the correct 'created_at' and 'updated_at' for recurrence
-            updated_doc = await shifts_collection.find_one({"_id": original_shift_id})
-            
-            # Process recurrence
-            await _process_shift_recurrence(updated_doc, original_shift_id)
-            
-            # Re-fetch the shift to get the updated data
-            new_shift_doc = await shifts_collection.find_one({"_id": result.inserted_id})
-            new_shift = Shift.from_mongo(new_shift_doc)
-
-        # Return the shift data in the standard response format
+            new_shift = await shifts_collection.find_one({"_id": result.inserted_id})
+        
         return success_response(
-            data=new_shift,
+            data=Shift.from_mongo(new_shift),
             message="Shift created successfully",
             code=201
         )
     except Exception as e:
-        print(f"❌ [Backend] Error creating shift: {str(e)}")
+        print(f"Error creating shift: {e}")
         return handle_generic_exception(e)
 
-# app/routes/hr.py
-
-# PUT /api/shifts/{shift_id} - Update a shift
 @router.put("/shifts/{shift_id}", response_model=StandardResponse[ShiftResponse])
 async def update_shift(shift_id: str, shift: Shift):
-    """Update an existing shift, and handle recurrence updates."""
+    """Update a shift. Simple update without recurrence magic."""
     try:
         shifts_collection = get_collection("shifts")
         
-        # Check if shift exists
-        old_shift_doc = await shifts_collection.find_one({"_id": ObjectId(shift_id)})
-        if not old_shift_doc:
+        # Check if exists
+        existing = await shifts_collection.find_one({"_id": ObjectId(shift_id)})
+        if not existing:
             return error_response(message="Shift not found", code=404)
-            
-        old_shift = Shift.from_mongo(old_shift_doc)
-        update_data = to_mongo_update_dict(shift)
-
-        print(f"🔍 [Backend] Updating shift {shift_id} with data: {update_data}")
-
-        # 1. Perform the update on the specific shift instance
+        
+        # Update only provided fields
+        update_data = to_mongo_update_dict(shift, exclude_unset=True)
+        
         result = await shifts_collection.update_one(
             {"_id": ObjectId(shift_id)},
             {"$set": update_data}
         )
-
-        if result.modified_count == 0 and result.matched_count == 0:
+        
+        if result.matched_count == 0:
             return error_response(message="Shift not found", code=404)
-
-        # 2. Handle Recurrence Logic Changes
-        updated_doc = await shifts_collection.find_one({"_id": ObjectId(shift_id)})
-        series_id = updated_doc.get("recurring_series_id") or shift_id
         
-        # A. If recurrence is kept or newly added, re-process future shifts
-        if updated_doc.get("recurring"):
-            # Ensure the recurring_series_id is set if it was a new recurrence
-            if not updated_doc.get("recurring_series_id"):
-                 await shifts_collection.update_one(
-                    {"_id": ObjectId(shift_id)},
-                    {"$set": {"recurring_series_id": shift_id}}
-                )
-                 updated_doc = await shifts_collection.find_one({"_id": ObjectId(shift_id)})
-                 series_id = shift_id
-
-            # Delete all *future* recurring shifts in the series
-            await shifts_collection.delete_many({
-                "recurring_series_id": series_id,
-                "start": {"$gt": old_shift_doc.get("start")} 
-            })
-            
-            # Re-create future shifts based on the new, updated shift data
-            await _process_shift_recurrence(updated_doc, ObjectId(series_id))
-            
-        # B. If recurrence was removed
-        elif old_shift.recurring and not updated_doc.get("recurring"):
-            # Delete all future recurring shifts in the series
-            await shifts_collection.delete_many({
-                "recurring_series_id": series_id,
-                "start": {"$gt": old_shift_doc.get("start")}
-            })
-            
-        # 3. Retrieve and return the FINAL updated shift
-        final_doc = await shifts_collection.find_one({"_id": ObjectId(shift_id)})
-        
-        if not final_doc:
-            return error_response(message="Shift not found after update", code=404)
-            
-        # Convert to Shift model and return in standard response
-        final_shift = Shift.from_mongo(final_doc)
-        
+        updated = await shifts_collection.find_one({"_id": ObjectId(shift_id)})
         return success_response(
-            data=final_shift,
+            data=Shift.from_mongo(updated),
             message="Shift updated successfully"
         )
     except Exception as e:
-        print(f"❌ [Backend] Error updating shift: {str(e)}")
+        print(f"Error updating shift: {e}")
         return handle_generic_exception(e)
-@router.put("/shifts/{shift_id}/status", response_model=StandardResponse[ShiftResponse])
-async def update_shift_status(shift_id: str, active: bool):
-    """Update the active status of a shift by ID."""
+
+@router.delete("/shifts/{shift_id}", response_model=StandardResponse[dict])
+async def delete_shift(shift_id: str, delete_all: bool = Query(False)):
+    """Delete a shift. delete_all is ignored (kept for API compatibility)."""
     try:
         shifts_collection = get_collection("shifts")
-        result = await shifts_collection.update_one(
-            {"_id": ObjectId(shift_id)}, 
-            {"$set": {"active": active, "updated_at": datetime.utcnow().isoformat()}}
-        )
-        if result.modified_count == 0:
+        result = await shifts_collection.delete_one({"_id": ObjectId(shift_id)})
+        if result.deleted_count == 0:
             return error_response(message="Shift not found", code=404)
-        
-        updated_shift = await shifts_collection.find_one({"_id": ObjectId(shift_id)})
-        return success_response(
-            data=Shift.from_mongo(updated_shift),
-            message="Shift status updated successfully"
-        )
+        return success_response(message="Shift deleted successfully")
     except Exception:
-        return error_response(message="Invalid ID format for shift", code=400)
+        return error_response(message="Invalid shift ID", code=400)
 
-# app/routes/hr.py
 
-# DELETE /api/shifts/{shift_id} - Delete a shift
-@router.delete("/shifts/{shift_id}", response_model=StandardResponse[dict])
-async def delete_shift(shift_id: str, delete_all: bool = Query(False, description="If true, deletes all future shifts in the recurring series.")):
-    """Delete a single shift (and optionally its future recurring instances)."""
-    
-    shifts_collection = get_collection("shifts")
-    shift_doc = await shifts_collection.find_one({"_id": ObjectId(shift_id)})
-    
-    if not shift_doc:
-        return error_response(message="Shift not found", code=404)
-        
-    is_recurring = shift_doc.get("recurring", False)
-    series_id = shift_doc.get("recurring_series_id")
-    
-    # If it's a recurring shift and the user specifies delete_all (or is deleting the original shift), delete the series
-    if is_recurring and delete_all:
-        print(f"Deleting all future recurring shifts for series: {series_id or shift_id}")
-        await shifts_collection.delete_many({
-            "recurring_series_id": series_id,
-            "start": {"$gt": shift_doc.get("start")}
-        })
-    
-    # Delete the specific shift instance
-    return await _delete_item("shifts", shift_id)
+
 
 # -----------------
 # Timesheet Entries endpoints
@@ -882,9 +659,6 @@ async def clock_out(entry_id: str):
     except Exception:
         return error_response(message="Invalid ID format for timesheet entry", code=400)
 
-# -----------------
-# Payroll endpoints
-# -----------------
 @router.get("/payroll", response_model=StandardResponse[List[PayrollResponse]])
 async def get_payroll_entries(
     employee_id: Optional[str] = Query(None),
@@ -893,14 +667,17 @@ async def get_payroll_entries(
     """Retrieve payroll entries, optionally filtered by employee_id or status."""
     try:
         payroll_collection = get_collection("payroll")
-        query = {"store_id": store_id} if store_id else {}
+        query = {}
+        if employee_id:
+            query["employee_id"] = employee_id
+        if status:
+            query["status"] = status
         
         payroll_list = []
-        # FIXED: Use async for loop instead of to_list()
-        async for payroll in payroll_collection.find(query):
+        async for payroll in await payroll_collection.find(query):
             payroll_list.append(Payroll.from_mongo(payroll))
             
-        return success_response(data=entries)
+        return success_response(data=payroll_list)
     except Exception as e:
         return handle_generic_exception(e)
 
