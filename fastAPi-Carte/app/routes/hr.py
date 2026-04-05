@@ -1,6 +1,6 @@
 # app/routes/hr.py - COMPLETELY UPDATED
 from fastapi import APIRouter, HTTPException, Query, status, Body
-from typing import List, Optional, Any  # Add Any to the imports
+from typing import List, Optional, Any
 from app.database import get_collection
 from app.models.hr import Employee, Shift, TimesheetEntry, Payroll, AccessRole, JobTitle, PayrollSettings, Timesheet, Department
 from app.models.response import (
@@ -14,8 +14,6 @@ from bson import ObjectId
 from datetime import datetime, timedelta
 import asyncio
 
-
-
 router = APIRouter(prefix="/api", tags=["hr"])
 
 # -----------------
@@ -27,11 +25,8 @@ async def get_departments(store_id: Optional[str] = Query(None)):
     try:
         departments_collection = get_collection("departments")
         query = {"store_id": store_id} if store_id else {}
-        departments = []
-        # FIXED: Use await and iterate
-        cursor = await departments_collection.find(query)
-        async for department in cursor:
-            departments.append(Department.from_mongo(department))
+        docs = await departments_collection.find(query).to_list(length=None)
+        departments = [Department.from_mongo(doc) for doc in docs]
         return success_response(data=departments)
     except Exception as e:
         return handle_generic_exception(e)
@@ -54,7 +49,6 @@ async def create_department(department: Department):
     try:
         departments_collection = get_collection("departments")
         department_dict = to_mongo_dict(department)
-        
         result = await departments_collection.insert_one(department_dict)
         new_department = await departments_collection.find_one({"_id": result.inserted_id})
         return success_response(
@@ -71,13 +65,11 @@ async def update_department(department_id: str, department: Department):
     try:
         departments_collection = get_collection("departments")
         department_dict = to_mongo_update_dict(department, exclude_unset=True)
-        
         result = await departments_collection.update_one(
             {"_id": ObjectId(department_id)}, {"$set": department_dict}
         )
         if result.modified_count == 0 and result.matched_count == 0:
             return error_response(message="Department not found", code=404)
-        
         updated_department = await departments_collection.find_one({"_id": ObjectId(department_id)})
         return success_response(
             data=Department.from_mongo(updated_department),
@@ -94,10 +86,7 @@ async def delete_department(department_id: str):
         result = await departments_collection.delete_one({"_id": ObjectId(department_id)})
         if result.deleted_count == 0:
             return error_response(message="Department not found", code=404)
-        return success_response(
-            data=None,
-            message="Department deleted successfully"
-        )
+        return success_response(data=None, message="Department deleted successfully")
     except Exception:
         return error_response(message="Invalid ID format for department", code=400)
 
@@ -110,11 +99,8 @@ async def get_employees(store_id: Optional[str] = Query(None)):
     try:
         employees_collection = get_collection("employees")
         query = {"store_id": store_id} if store_id else {}
-        employees = []
-        # FIXED: Use await and iterate
-        employee_docs = await employees_collection.find(query)
-        for employee in employee_docs:
-            employees.append(Employee.from_mongo(employee))
+        docs = await employees_collection.find(query).to_list(length=None)
+        employees = [Employee.from_mongo(doc) for doc in docs]
         return success_response(data=employees)
     except Exception as e:
         return handle_generic_exception(e)
@@ -137,7 +123,6 @@ async def create_employee(employee: Employee):
     try:
         employees_collection = get_collection("employees")
         employee_dict = to_mongo_dict(employee)
-        
         result = await employees_collection.insert_one(employee_dict)
         new_employee = await employees_collection.find_one({"_id": result.inserted_id})
         return success_response(
@@ -154,13 +139,11 @@ async def update_employee(employee_id: str, employee: Employee):
     try:
         employees_collection = get_collection("employees")
         employee_dict = to_mongo_update_dict(employee, exclude_unset=True)
-        
         result = await employees_collection.update_one(
             {"_id": ObjectId(employee_id)}, {"$set": employee_dict}
         )
         if result.modified_count == 0 and result.matched_count == 0:
             return error_response(message="Employee not found", code=404)
-        
         updated_employee = await employees_collection.find_one({"_id": ObjectId(employee_id)})
         return success_response(
             data=Employee.from_mongo(updated_employee),
@@ -177,10 +160,7 @@ async def delete_employee(employee_id: str):
         result = await employees_collection.delete_one({"_id": ObjectId(employee_id)})
         if result.deleted_count == 0:
             return error_response(message="Employee not found", code=404)
-        return success_response(
-            data=None,
-            message="Employee deleted successfully"
-        )
+        return success_response(data=None, message="Employee deleted successfully")
     except Exception:
         return error_response(message="Invalid ID format for employee", code=400)
 
@@ -192,11 +172,8 @@ async def get_access_roles():
     """Retrieve all defined access roles."""
     try:
         access_roles_collection = get_collection("access_roles")
-        roles = []
-        # FIXED: Use await and iterate
-        role_docs = await access_roles_collection.find()
-        for role in role_docs:
-            roles.append(AccessRole.from_mongo(role))
+        docs = await access_roles_collection.find().to_list(length=None)
+        roles = [AccessRole.from_mongo(doc) for doc in docs]
         return success_response(data=roles)
     except Exception as e:
         return handle_generic_exception(e)
@@ -219,7 +196,6 @@ async def create_access_role(role: AccessRole):
     try:
         access_roles_collection = get_collection("access_roles")
         role_dict = to_mongo_dict(role)
-        
         result = await access_roles_collection.insert_one(role_dict)
         new_role = await access_roles_collection.find_one({"_id": result.inserted_id})
         return success_response(
@@ -236,13 +212,11 @@ async def update_access_role(role_id: str, role: AccessRole):
     try:
         access_roles_collection = get_collection("access_roles")
         role_dict = to_mongo_update_dict(role, exclude_unset=True)
-        
         result = await access_roles_collection.update_one(
             {"_id": ObjectId(role_id)}, {"$set": role_dict}
         )
         if result.modified_count == 0 and result.matched_count == 0:
             return error_response(message="Access role not found", code=404)
-        
         updated_role = await access_roles_collection.find_one({"_id": ObjectId(role_id)})
         return success_response(
             data=AccessRole.from_mongo(updated_role),
@@ -259,10 +233,7 @@ async def delete_access_role(role_id: str):
         result = await access_roles_collection.delete_one({"_id": ObjectId(role_id)})
         if result.deleted_count == 0:
             return error_response(message="Access role not found", code=404)
-        return success_response(
-            data=None,
-            message="Access role deleted successfully"
-        )
+        return success_response(data=None, message="Access role deleted successfully")
     except Exception:
         return error_response(message="Invalid ID format for access role", code=400)
 
@@ -275,11 +246,8 @@ async def get_job_titles(store_id: Optional[str] = Query(None)):
     try:
         job_titles_collection = get_collection("job_titles")
         query = {"store_id": store_id} if store_id else {}
-        titles = []
-        # FIXED: Use await and iterate
-        title_docs = await job_titles_collection.find(query)
-        for title in title_docs:
-            titles.append(JobTitle.from_mongo(title))
+        docs = await job_titles_collection.find(query).to_list(length=None)
+        titles = [JobTitle.from_mongo(doc) for doc in docs]
         return success_response(data=titles)
     except Exception as e:
         return handle_generic_exception(e)
@@ -302,7 +270,6 @@ async def create_job_title(title: JobTitle):
     try:
         job_titles_collection = get_collection("job_titles")
         title_dict = to_mongo_dict(title)
-        
         result = await job_titles_collection.insert_one(title_dict)
         new_title = await job_titles_collection.find_one({"_id": result.inserted_id})
         return success_response(
@@ -319,13 +286,11 @@ async def update_job_title(title_id: str, title: JobTitle):
     try:
         job_titles_collection = get_collection("job_titles")
         title_dict = to_mongo_update_dict(title, exclude_unset=True)
-        
         result = await job_titles_collection.update_one(
             {"_id": ObjectId(title_id)}, {"$set": title_dict}
         )
         if result.modified_count == 0 and result.matched_count == 0:
             return error_response(message="Job title not found", code=404)
-        
         updated_title = await job_titles_collection.find_one({"_id": ObjectId(title_id)})
         return success_response(
             data=JobTitle.from_mongo(updated_title),
@@ -342,19 +307,13 @@ async def delete_job_title(title_id: str):
         result = await job_titles_collection.delete_one({"_id": ObjectId(title_id)})
         if result.deleted_count == 0:
             return error_response(message="Job title not found", code=404)
-        return success_response(
-            data=None,
-            message="Job title deleted successfully"
-        )
+        return success_response(data=None, message="Job title deleted successfully")
     except Exception:
         return error_response(message="Invalid ID format for job title", code=400)
 
 # -----------------
-# Shifts endpoints
+# Shifts endpoints - SIMPLIFIED
 # -----------------
-# ==================== SHIFT ENDPOINTS - CLEAN VERSION ====================
-# Replace ALL shift-related code in hr.py with this:
-
 @router.get("/shifts", response_model=StandardResponse[List[ShiftResponse]])
 async def get_shifts(employee_id: Optional[str] = Query(None), active: Optional[bool] = Query(None)):
     """Get shifts - optionally filtered by employee_id or active status"""
@@ -366,11 +325,8 @@ async def get_shifts(employee_id: Optional[str] = Query(None), active: Optional[
         if active is not None:
             query["active"] = active
         
-        shifts = []
-        # FIX: await the find() coroutine first
-        cursor = await shifts_collection.find(query)
-        async for shift in cursor:
-            shifts.append(Shift.from_mongo(shift))
+        docs = await shifts_collection.find(query).to_list(length=None)
+        shifts = [Shift.from_mongo(doc) for doc in docs]
         return success_response(data=shifts)
     except Exception as e:
         return handle_generic_exception(e)
@@ -437,6 +393,9 @@ async def update_shift(shift_id: str, shift: Shift):
             return error_response(message="Shift not found", code=404)
         
         updated = await shifts_collection.find_one({"_id": ObjectId(shift_id)})
+        if not updated:
+            return error_response(message="Shift not found after update", code=404)
+        
         return success_response(
             data=Shift.from_mongo(updated),
             message="Shift updated successfully"
@@ -453,12 +412,9 @@ async def delete_shift(shift_id: str, delete_all: bool = Query(False)):
         result = await shifts_collection.delete_one({"_id": ObjectId(shift_id)})
         if result.deleted_count == 0:
             return error_response(message="Shift not found", code=404)
-        return success_response(message="Shift deleted successfully")
+        return success_response(data=None, message="Shift deleted successfully")
     except Exception:
         return error_response(message="Invalid shift ID", code=400)
-
-
-
 
 # -----------------
 # Timesheet Entries endpoints
@@ -487,11 +443,8 @@ async def get_timesheet_entries(
             except ValueError:
                 return error_response(message="Invalid date format. Use ISO 8601 format.", code=400)
         
-        entries = []
-        # FIXED: Use await and iterate
-        entry_docs = await ts_collection.find(query)
-        for entry in entry_docs:
-            entries.append(TimesheetEntry.from_mongo(entry))
+        docs = await ts_collection.find(query).to_list(length=None)
+        entries = [TimesheetEntry.from_mongo(doc) for doc in docs]
         return success_response(data=entries)
     except Exception as e:
         return handle_generic_exception(e)
@@ -514,7 +467,6 @@ async def create_timesheet_entry(entry: TimesheetEntry):
     try:
         ts_collection = get_collection("timesheet_entries")
         entry_dict = to_mongo_dict(entry)
-        
         result = await ts_collection.insert_one(entry_dict)
         new_entry = await ts_collection.find_one({"_id": result.inserted_id})
         return success_response(
@@ -564,10 +516,7 @@ async def delete_timesheet_entry(entry_id: str):
         result = await ts_collection.delete_one({"_id": ObjectId(entry_id)})
         if result.deleted_count == 0:
             return error_response(message="Timesheet entry not found", code=404)
-        return success_response(
-            data=None,
-            message="Timesheet entry deleted successfully"
-        )
+        return success_response(data=None, message="Timesheet entry deleted successfully")
     except Exception:
         return error_response(message="Invalid ID format for timesheet entry", code=400)
 
@@ -659,6 +608,9 @@ async def clock_out(entry_id: str):
     except Exception:
         return error_response(message="Invalid ID format for timesheet entry", code=400)
 
+# -----------------
+# Payroll endpoints
+# -----------------
 @router.get("/payroll", response_model=StandardResponse[List[PayrollResponse]])
 async def get_payroll_entries(
     employee_id: Optional[str] = Query(None),
@@ -673,10 +625,8 @@ async def get_payroll_entries(
         if status:
             query["status"] = status
         
-        payroll_list = []
-        async for payroll in await payroll_collection.find(query):
-            payroll_list.append(Payroll.from_mongo(payroll))
-            
+        docs = await payroll_collection.find(query).to_list(length=None)
+        payroll_list = [Payroll.from_mongo(doc) for doc in docs]
         return success_response(data=payroll_list)
     except Exception as e:
         return handle_generic_exception(e)
@@ -688,8 +638,7 @@ async def get_payroll_entry(payroll_id: str):
         payroll_collection = get_collection("payroll")
         entry = await payroll_collection.find_one({"_id": ObjectId(payroll_id)})
         if entry:
-            payroll_model = Payroll.from_mongo(entry)
-            return success_response(data=payroll_model)
+            return success_response(data=Payroll.from_mongo(entry))
         return error_response(message="Payroll entry not found", code=404)
     except Exception:
         return error_response(message="Invalid ID format for payroll entry", code=400)
@@ -700,7 +649,6 @@ async def create_payroll_entry(entry: Payroll):
     try:
         payroll_collection = get_collection("payroll")
         entry_dict = to_mongo_dict(entry)
-        
         result = await payroll_collection.insert_one(entry_dict)
         new_entry = await payroll_collection.find_one({"_id": result.inserted_id})
         return success_response(
@@ -717,13 +665,11 @@ async def update_payroll_entry(payroll_id: str, entry: Payroll):
     try:
         payroll_collection = get_collection("payroll")
         entry_dict = to_mongo_update_dict(entry, exclude_unset=True)
-        
         result = await payroll_collection.update_one(
             {"_id": ObjectId(payroll_id)}, {"$set": entry_dict}
         )
         if result.modified_count == 0 and result.matched_count == 0:
             return error_response(message="Payroll entry not found", code=404)
-        
         updated_entry = await payroll_collection.find_one({"_id": ObjectId(payroll_id)})
         return success_response(
             data=Payroll.from_mongo(updated_entry),
@@ -775,10 +721,7 @@ async def delete_payroll_entry(payroll_id: str):
         result = await payroll_collection.delete_one({"_id": ObjectId(payroll_id)})
         if result.deleted_count == 0:
             return error_response(message="Payroll entry not found", code=404)
-        return success_response(
-            data=None,
-            message="Payroll entry deleted successfully"
-        )
+        return success_response(data=None, message="Payroll entry deleted successfully")
     except Exception:
         return error_response(message="Invalid ID format for payroll entry", code=400)
 
@@ -867,7 +810,6 @@ async def update_payroll_settings(settings_id: str, settings: PayrollSettings):
     except Exception:
         return error_response(message="Invalid ID format for payroll settings", code=400)
 
-        
 # Update this helper function in app/routes/hr.py
 async def get_or_create_payroll_settings(store_id: str) -> PayrollSettings:
     """Get payroll settings for a store, create default if not exists."""
@@ -897,7 +839,7 @@ async def get_or_create_payroll_settings(store_id: str) -> PayrollSettings:
     settings_dict = to_mongo_dict(default_settings)
     await payroll_settings_collection.insert_one(settings_dict)
     return default_settings
-    
+
 # -----------------
 # Timesheets management endpoint
 # -----------------
