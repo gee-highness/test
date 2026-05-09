@@ -5,8 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.logging_config import get_logger, setup_logging
 from app.routes import (
     core_router, hr_router, inventory_router, auth_router,
-    payroll_router, payments_router, log_router, reports_router, analytics_router
+    payroll_router, payments_router, log_router, reports_router,
+    analytics_router, platform_router
 )
+from app.routes.platform import seed_default_platform_admin
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -49,6 +51,7 @@ else:
         "http://127.0.0.1:3000",
         "https://carte-pos.vercel.app",
         "https://carte-admin.vercel.app",
+        "https://carte-pos-admin.vercel.app",
     ]
     app.add_middleware(
         CORSMiddleware,
@@ -60,6 +63,7 @@ else:
 
 # === CRITICAL: REORDER ROUTERS ===
 # Put specific routers BEFORE generic core router to avoid conflicts
+app.include_router(platform_router)    # Platform super admin routes (before core)
 app.include_router(reports_router)    # First - specific reports routes
 app.include_router(analytics_router)  # Second - specific analytics routes
 app.include_router(log_router)        # Third - specific log routes
@@ -82,6 +86,10 @@ async def startup_event():
         await client.admin.command('ping')
         logger.info("✅ Connected to MongoDB!")
         print("✅ Connected to MongoDB!")
+
+        # Auto-seed default platform admin if none exists
+        await seed_default_platform_admin()
+
     except Exception as e:
         logger.error(f"❌ Could not connect to MongoDB: {e}")
         print(f"❌ Could not connect to MongoDB: {e}")
